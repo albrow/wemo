@@ -1,42 +1,85 @@
 package wemo
 
 import (
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
 )
 
+// Switch represents a WeMo switch.
+type Switch struct {
+	host string
+}
+
 var binaryStateRegex = regexp.MustCompile(`<BinaryState>(0|1)</BinaryState>`)
 
-// State represents the state of the WeMo switch and is either On or Off.
-type State uint
+type state uint
 
 const (
-	Off State = iota
-	On
+	off state = iota
+	on
 )
 
-func (s State) String() string {
-	if s == On {
+func (s state) String() string {
+	if s == on {
 		return "on"
 	}
 	return "off"
 }
 
-// GetState returns the state of the WeMo switch.
-func GetState() (State, error) {
+// NewSwitch creates and returns a new switch. host should be the IP address and
+// port for the switch.
+func NewSwitch(host string) *Switch {
+	return &Switch{
+		host: host,
+	}
+}
+
+// IsOn returns true if the switch is currently on and false otherwise.
+func (s *Switch) IsOn() (bool, error) {
+	switchState, err := s.getState()
+	if err != nil {
+		return false, err
+	}
+	return switchState == on, nil
+}
+
+// TurnOff turns the switch off.
+func (s *Switch) TurnOff() error {
+	return s.setState(off)
+}
+
+// TurnOn turns the switch on.
+func (s *Switch) TurnOn() error {
+	return s.setState(on)
+}
+
+// Toggle toggles the switch.
+func (s *Switch) Toggle() error {
+	switchState, err := s.getState()
+	if err != nil {
+		return err
+	}
+	switch switchState {
+	case on:
+		return s.TurnOff()
+	default:
+		return s.TurnOn()
+	}
+}
+
+// getState returns the state of the WeMo switch.
+func (s *Switch) getState() (state, error) {
 	requestBody := `<?xml version="1.0" encoding="utf-8"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
   <s:Body>
     <u:GetBinaryState xmlns:u="urn:Belkin:service:basicevent:1"></u:GetBinaryState>
   </s:Body>
 </s:Envelope>`
-	responseBody, err := post("GetBinaryState", requestBody)
+	responseBody, err := s.post("GetBinaryState", requestBody)
 	if err != nil {
 		return 0, err
 	}
@@ -48,11 +91,11 @@ func GetState() (State, error) {
 	if err != nil {
 		return 0, err
 	}
-	return State(uint(stateInt)), nil
+	return state(uint(stateInt)), nil
 }
 
-// SetState sets the state of the WeMo switch.
-func SetState(state State) error {
+// setState sets the state of the WeMo switch.
+func (s *Switch) setState(state state) error {
 	requestBody := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
 <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
   <s:Body>
@@ -61,18 +104,14 @@ func SetState(state State) error {
     </u:SetBinaryState>
   </s:Body>
 </s:Envelope>`, state)
-	if _, err := post("SetBinaryState", requestBody); err != nil {
+	if _, err := s.post("SetBinaryState", requestBody); err != nil {
 		return err
 	}
 	return nil
 }
 
-func post(action string, body string) ([]byte, error) {
-	wemoHost := os.Getenv("WEMO_HOST")
-	if wemoHost == "" {
-		return nil, errors.New("Missing required env var: WEMO_HOST")
-	}
-	url := "http://" + wemoHost + "/upnp/control/basicevent1"
+func (s *Switch) post(action string, body string) ([]byte, error) {
+	url := "http://" + s.host + "/upnp/control/basicevent1"
 	req, err := http.NewRequest("POST", url, strings.NewReader(body))
 	if err != nil {
 		return nil, err
